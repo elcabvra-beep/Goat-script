@@ -1,0 +1,416 @@
+# GOAT.Script — Formal Core Specification
+**Version:** 1.1.0  
+**Status:** Executable Core + Runtime Contract  
+**Target:** GOAT OS Ontology Engine, GTS Runtime, Game/App Canvas  
+
+---
+
+## 0. Design Intent
+
+GOAT.Script treats philosophical categories as first-class runtime mechanisms:
+
+- **Ontology** defines what can exist and relate.
+- **Epistemology** defines what is known, with quantified confidence and decay.
+- **Existential** defines meaning, purpose binding, and void reclamation.
+- **Agential** defines who can form purposes, observe, and liquidate.
+- **Utilitarian / Cynical** defines cold yield evaluation and triage under pressure.
+
+These are not narrative overlays. They are evaluated every tick by the Graduated Runtime Manifold (GRM).
+
+---
+
+## 1. Formal Core Types
+
+### 1.1 Primitive Values
+
+```
+Confidence   ∈ [0.0, 1.0]
+Meaning      ∈ [0.0, ∞)
+Energy       ∈ [0.0, ∞)
+Utility      ∈ ℝ
+TickDelta    ∈ ℝ⁺
+EntityId     = unique identifier
+```
+
+### 1.2 Ontological Layer
+
+```
+ontology Name {
+  type T
+  relation R(T₁, T₂, ...)
+}
+
+Entity = {
+  id          : EntityId
+  type        : Type
+  energy      : Energy
+  meaning     : Meaning
+  purpose     : Option[Imperative]
+  agency      : AgencyLevel          // new
+  output_rate : Float
+  maintenance : Float
+  repair_cost : Float
+  render_mode : RenderMode
+}
+```
+
+Relations are directed and may carry constraints (e.g. `binds_to` requires AgencyLevel ≥ Purposeful).
+
+### 1.3 Epistemic Layer
+
+```
+EpistemicState =
+  | Proven    { confidence = 1.0, source : String }
+  | Observed   { confidence : Confidence, uncertainty_decay : Float }
+  | Inferred   { confidence : Confidence, risk_factor : Risk }
+  | Unknown    { confidence = 0.0 }
+
+update_confidence(state, Δt, has_line_of_sight) → EpistemicState
+  - Observed / Inferred decay by uncertainty_decay × Δt when !has_line_of_sight
+  - Confidence clamped to [0.0, 1.0]
+  - Crossing thresholds may promote/demote state
+```
+
+Render and AI behavior are pure functions of EpistemicState:
+
+| State     | Default Render Mode   | Default Behavior          |
+|-----------|-----------------------|---------------------------|
+| Proven    | Solid_Opaque          | Fully interactable        |
+| Observed  | Solid_Translucent     | Interactable with risk    |
+| Inferred  | Wireframe             | Treat as potential threat |
+| Unknown   | Wireframe_GHOST       | TreatAsHostileOrVoid      |
+
+### 1.4 Existential Layer
+
+```
+existential_model Name {
+  decay_rate : Float          // meaning lost per second when unbound
+
+  decay_meaning(entity, Δt):
+    if entity.purpose is None:
+      entity.meaning -= decay_rate × Δt
+    if entity.meaning ≤ 0 ∨ entity.energy ≤ 0:
+      void_reclamation(entity)
+
+  on_purpose_loss(entity):
+    entity.state ← Despair
+    entity.maintenance *= 2.0   // panic inefficiency
+
+  void_reclamation(entity):
+    reclaim_memory(entity)
+    emit("AgentSuccumbedToVoid", entity.id)
+}
+```
+
+Meaning is a real resource. Idle unbound agents decay. Zero meaning or energy triggers deterministic reclamation.
+
+### 1.5 Agential Layer (new)
+
+```
+AgencyLevel =
+  | Passive          // can only be acted upon
+  | Observing       // can form epistemic states
+  | Purposeful      // can bind and unbind Imperatives
+  | Sovereign       // can liquidate, triage, and rewrite purposes of others
+
+agent_can(entity, action) → Bool
+  bind_purpose     requires ≥ Purposeful
+  observe          requires ≥ Observing
+  liquidate        requires ≥ Sovereign
+  form_imperative  requires ≥ Purposeful
+```
+
+Player-controlled entities start at Sovereign (or configurable). NPC workers start at Purposeful or Observing. SystemVoid itself is Passive.
+
+This layer makes multiplayer, AI directors, and hierarchical control explicit.
+
+### 1.6 Utilitarian / Cynical Layer
+
+```
+utility(entity) → Utility =
+  let net = entity.output_rate - entity.maintenance
+  if net ≤ 0 then 0.0
+  else net / max(entity.repair_cost, ε)
+
+on_resource_crisis(colony, deficit):
+  sort colony ascending by utility
+  while deficit > 0 ∧ colony not empty:
+    victim ← pop lowest
+    if agent_can(caller, liquidate):
+      liquidate_for_parts(victim)
+      deficit -= recovered_value(victim)
+```
+
+Evaluation is pure and total. Liquidation is only legal for agents with sufficient AgencyLevel.
+
+---
+
+## 2. Graduated Runtime Manifold (GRM) Contract
+
+The GRM is the only component allowed to touch hardware resources, scheduling, and memory.
+
+### 2.1 Guarantees
+
+| Guarantee                    | Description                                      |
+|-----------------------------|--------------------------------------------------|
+| Tick Determinism            | Same inputs + same seed → same entity states     |
+| Soft Real-Time              | step() must complete within 1/tick_rate          |
+| Memory Pressure Response    | When pressure ≥ threshold, triage is mandatory   |
+| Epistemic Consistency       | Confidence values never increase without evidence|
+| Void Safety                 | Reclaimed entities are unreachable after emit    |
+
+### 2.2 Allowed Sacrifices (under pressure)
+
+When `GRM.memory_pressure() ≥ 0.85` or frame budget is exceeded:
+
+1. Lowest-utility agents may be liquidated (Cynical layer).
+2. Render modes may be forced to Wireframe / GHOST.
+3. Epistemic updates for non-visible entities may be deferred one tick.
+4. Non-critical event emission may be coalesced.
+
+The GRM never invents purpose, never increases confidence without evidence, and never resurrects a void-reclaimed entity without an explicit ontology-level rebirth relation.
+
+### 2.3 Pressure API
+
+```
+GRM.memory_pressure() → Float ∈ [0.0, 1.0]
+GRM.frame_budget_remaining() → Duration
+GRM.request_liquidation(entity) → Bool   // only if caller has Agency
+```
+
+---
+
+## 3. Minimal Language Surface (Executable Subset)
+
+The following constructs are required for the core loop:
+
+```
+theme Name { ... }
+
+ontology Name { type T ; relation R(...) }
+
+epistemology Name {
+  state Proven | Observed | Inferred | Unknown
+}
+
+existential_model Name {
+  decay_rate : Float
+  on_purpose_loss(...)
+  void_reclamation(...)
+}
+
+agency_model Name {
+  levels : Passive | Observing | Purposeful | Sovereign
+}
+
+utilitarian_evaluator Name {
+  function utility(entity) → Float
+  on_resource_crisis(...)
+}
+
+game Name {
+  canvas { ... }
+  loop {
+    tick_rate : Int
+    step(Δt) { ... }
+  }
+}
+```
+
+---
+
+## 4. SystemSovereignty Reference (Updated)
+
+See companion file: `SystemSovereignty.minimal.py`  
+This is a faithful, runnable reduction of the original example that implements:
+
+- Ontology of Agents
+- Epistemic confidence decay
+- Existential meaning decay + void reclamation
+- Agential levels
+- Utilitarian triage under simulated memory pressure
+- 60 Hz conceptual loop with visible state dumps
+
+---
+
+## 5. Temporal / Cosmological Layer (Genesis · Age · Epoch · Aeon · Apocalypse)
+
+Time is not a passive background. It is a first-class ontological and existential resource with multiple nested scales and terminal events.
+
+### 5.1 Temporal Scales
+
+```
+TimeScale =
+  | Instant     // single tick
+  | Age         // short narrative / campaign scale (e.g. 10²–10⁴ ticks)
+  | Epoch       // civilizational / geological scale
+  | Aeon        // deep-time / cosmological scale
+  | Eternity    // unbounded (only reachable after successful Genesis or before Apocalypse)
+```
+
+Each scale carries its own decay multipliers, confidence horizons, and utility horizons.
+
+### 5.2 Genesis & Apocalypse as Terminal Relations
+
+```
+relation genesis(Entity | Ontology, TimeScale)   // birth of a new temporal continuum
+relation apocalypse(Entity | Ontology, TimeScale) // irreversible termination of a continuum
+
+genesis_event:
+  - Creates a new TemporalManifold
+  - Resets or seeds meaning, energy, and epistemic baselines
+  - May inherit or deliberately discard prior Aeon state
+  - Requires Sovereign agency (or higher cosmological authority)
+
+apocalypse_event:
+  - Triggers synchronized void_reclamation across the target scale
+  - May preserve a residual “echo” (low-confidence epistemic remnant)
+  - Can be local (single Age) or total (Aeon-level)
+  - Utilitarian evaluation may delay or accelerate it under resource crisis
+  - Automatically notifies the ApocalypseCollector (if one exists)
+```
+
+### 5.2.1 Apocalypse Collector & Broker
+
+The Collector is a privileged Entity that acts as the sole broker of residual state after any Apocalypse.  
+**It is active only when a capable third-party Overseer can judge the collection, and that Overseer (or the Collector under its authority) must possess multi-scale awareness (Age · Epoch · Aeon) to weigh residuals properly.**
+
+```
+Overseer = Entity {
+  id                : EntityId
+  agency            : ≥ Sovereign
+  scale_awareness   : Set[TimeScale]     // must contain Age, Epoch, Aeon to be capable
+  judgment_authority: Bool
+}
+
+ApocalypseCollector = Entity {
+  id                : "Collector" | custom
+  agency            : ≥ Sovereign
+  collected         : List[ResidualBundle]
+  brokerage_log     : List[Transfer]
+  policy            : BrokerPolicy
+  overseer          : Option[Overseer]   // required for activation
+  active            : Bool               // true only while a capable Overseer is bound
+  scale_weights     : Map[TimeScale, Float]  // how residuals from each scale are valued
+}
+
+ResidualBundle = {
+  meaning_sum       : Meaning
+  energy_sum        : Energy
+  confidence_echo   : Confidence
+  entity_echoes     : List[EntityId]
+  scale_of_origin   : TimeScale
+  timestamp         : TemporalCoordinate
+}
+
+BrokerPolicy =
+  | PreserveEcho
+  | RecycleUtilitarian
+  | SeedGenesis
+  | TransferUpScale
+  | VoidFinal
+```
+
+Activation, issuance & judgment rules (robust):
+
+1. **Every Apocalypse triggers the Collector.** There is no optional path; residual is always presented for collection.
+2. On each Apocalypse the Collector **issues** one or more third-party Judgment Structures.
+3. Issued third parties are required to be:
+   - **Viable**: agency ≥ Sovereign, full scale awareness {Age, Epoch, Aeon}, judgment_authority = true.
+   - **Hidden**: their EpistemicState begins as Inferred or Unknown to ordinary agents; only the Collector (and higher cosmological authority) holds Proven knowledge of them.
+4. The Collector becomes (or remains) active once at least one viable hidden third party has been successfully issued and bound.
+5. Brokerage actions require judgment from at least one currently viable hidden third party.
+6. Scale weighting still applies; the judging third party must be able to weigh across all three major scales.
+7. Hidden third parties themselves are subject to Existential decay and may lose viability; the Collector must be prepared to issue replacements.
+8. Transfers remain Epistemic artifacts; observation of a hidden judge by ordinary agents does not automatically raise the judge’s visibility (visibility is controlled by the Collector).
+9. SeedGenesis still requires a separate Sovereign Genesis declaration; the Collector only brokers capital.
+10. No residual may resurrect a void-reclaimed Entity without an explicit ontology-level rebirth relation.
+11. Under extreme GRM pressure a viable hidden judge may force RecycleUtilitarian mode.
+
+Language surface:
+
+```
+judgment_structure Name {
+  viable   : Bool
+  hidden   : Bool                  // starts true
+  scale_awareness : {Age, Epoch, Aeon}
+  judgment_authority : true
+}
+
+collector Name {
+  on_apocalypse(bundle)            // always fires
+  issue_judgment_structure() → JudgmentStructure   // viable + hidden
+  broker(target, policy) → TransferResult          // requires viable hidden judge
+  is_active() → Bool
+}
+```
+
+### 5.3 Time Function Logic (Robust Characteristics)
+
+```
+time_function Name {
+  scale          : TimeScale
+  rate           : Float | Function          // may be non-linear, stochastic, or exotic
+  direction      : Forward | Bidirectional | Cyclic
+  causality      : Strict | Soft | Acausal   // Soft allows limited retrocausality under high confidence
+  observability  : EpistemicState → Bool
+  decay_coupling : how meaning / confidence / energy scale with Δt at this level
+}
+
+Robust guarantees:
+1. Monotonicity under Strict causality (no automatic time travel).
+2. Scale invariance of existential decay ratios when moving between Age → Epoch → Aeon.
+3. Epistemic horizon: confidence cannot be maintained across more than one major scale jump without evidence.
+4. Genesis is the only operation that may create a new independent TemporalManifold.
+5. Apocalypse is irreversible at its declared scale; lower scales may be reborn inside a higher surviving continuum.
+6. All time functions are themselves Entities and therefore subject to meaning decay and utilitarian triage.
+7. Exotic functions (gamma, bessel, zeta, etc.) may be used inside rate definitions and remain first-class.
+```
+
+### 5.4 Integration with Existing Layers
+
+- **Existential**: Meaning decay rate is multiplied by the active TimeScale factor.
+- **Epistemic**: Long-scale observations (Epoch/Aeon) start with lower base confidence and slower decay.
+- **Utilitarian**: Cost of maintaining high-fidelity time functions at Aeon scale is extreme; triage prefers Age-scale approximations under pressure.
+- **Agential**: Only Sovereign (or designated Cosmological) agents may declare Genesis or Apocalypse.
+- **Scientific / Exotic**: Differential equations and special functions can be parameterized by the active temporal rate.
+
+### 5.5 Language Surface Additions
+
+```
+temporal_model Name {
+  scales { Age, Epoch, Aeon }
+  genesis_rules { ... }
+  apocalypse_rules { ... }
+  time_functions { ... }
+}
+
+on_genesis(manifold, scale)
+on_apocalypse(manifold, scale)
+current_scale() → TimeScale
+advance(scale, Δt)
+```
+
+---
+
+## 6. Key Invariants (Updated)
+
+1. **No free meaning** — purpose must be actively bound or meaning decays.
+2. **No free knowledge** — confidence only rises with evidence; otherwise it decays.
+3. **No free existence** — zero energy or zero meaning → deterministic void.
+4. **No free power** — liquidation and purpose rewriting require Sovereign agency.
+5. **Pressure is real** — the GRM may force triage; scripts cannot ignore it.
+6. **No free time** — every temporal advance consumes resources proportional to scale; Genesis and Apocalypse are privileged, irreversible (at their scale) acts.
+7. **Scale coherence** — existential and epistemic quantities remain consistent when projected across Age ↔ Epoch ↔ Aeon.
+
+---
+
+## 7. Next Immediate Work
+
+- Expand the Python slice with a working TemporalManifold (Genesis / Age progression / Apocalypse).
+- Define formal grammar / AST for the surface syntax.
+- Add relation constraints and type checking.
+- Multi-agent purpose negotiation rules.
+- Visual / illustration set for temporal scales and terminal events.
+
+This core is now concrete enough to begin implementation and playtesting.
